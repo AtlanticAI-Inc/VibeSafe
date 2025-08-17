@@ -1,0 +1,36 @@
+const mongoose = require('mongoose');
+
+const connectDB = async () => {
+  try {
+    const mongoURI = process.env.NODE_ENV === 'test' 
+      ? process.env.MONGODB_URI_TEST 
+      : process.env.MONGODB_URI;
+
+    const conn = await mongoose.connect(mongoURI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+
+    console.log(`MongoDB Connected: ${conn.connection.host}`);
+  } catch (error) {
+    console.error('Database connection error:', error.message);
+    process.exit(1);
+  }
+};
+
+const disconnectDB = async () => {
+  try {
+    await mongoose.disconnect();
+    console.log('MongoDB Disconnected');
+  } catch (error) {
+    console.error('Database disconnection error:', error.message);
+  }
+};
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  await disconnectDB();
+  process.exit(0);
+});
+
+module.exports = { connectDB, disconnectDB };

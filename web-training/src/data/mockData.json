@@ -1,0 +1,1 @@
+{"users":[{"id":1,"name":"Security Developer","email":"dev@example.com","progress":65,"level":"Intermediate","completedModules":8,"totalModules":12,"certificates":6,"isAdmin":false}],"scanResults":[{"id":1,"timestamp":"2024-01-15 14:30:22","critical":2,"high":5,"medium":8,"low":3,"status":"completed"}]}

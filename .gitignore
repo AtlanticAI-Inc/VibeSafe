@@ -172,3 +172,10 @@ dist
 /blogs/ 
 
 .cursor
+
+
+# Added by VibeSafe Security Remediation
+# Environment files
+*.env
+.env*
+!/.env.example
