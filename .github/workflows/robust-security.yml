@@ -1,0 +1,291 @@
+---
+name: Robust Security Scanning (No API Dependencies)
+
+on:
+  push:
+    branches: [main, develop, team/security-framework-private]
+  pull_request:
+    branches: [main, team/security-framework-private]
+  workflow_dispatch:
+
+env:
+  FAIL_ON_HIGH_SEVERITY: false  # Set to false for testing
+
+jobs:
+  # Job 1: Dependency Security Scan
+  dependency-security:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+            echo "✅ Dependencies installed"
+          else
+            echo "⚠️ No package.json found, skipping dependency installation"
+          fi
+
+      - name: Run npm audit
+        run: |
+          echo "🔍 Running npm security audit..."
+          if [ -f "package.json" ]; then
+            npm audit --json > npm-audit-results.json 2>&1 || echo "npm audit found vulnerabilities"
+            npm audit > npm-audit-human.txt 2>&1 || echo "npm audit completed"
+            echo "✅ npm audit completed"
+          else
+            echo "⚠️ No package.json found, skipping npm audit"
+            echo "{}" > npm-audit-results.json
+          fi
+
+      - name: Display npm audit summary
+        run: |
+          if [ -f "npm-audit-human.txt" ]; then
+            echo "=== NPM AUDIT SUMMARY ==="
+            cat npm-audit-human.txt
+          fi
+
+      - name: Upload npm audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-scan-results
+          path: |
+            npm-audit-results.json
+            npm-audit-human.txt
+          retention-days: 30
+
+  # Job 2: Secrets Detection
+  secrets-detection:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GitLeaks
+        run: |
+          echo "🔧 Installing GitLeaks..."
+          wget -q https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz
+          tar -xzf gitleaks_linux_x64.tar.gz
+          chmod +x gitleaks
+          echo "✅ GitLeaks installed"
+
+      - name: Run GitLeaks scan
+        run: |
+          echo "🔍 Running GitLeaks secrets detection..."
+          ./gitleaks detect --source . --report-format json --report-path gitleaks-results.json || echo "GitLeaks scan completed"
+          ./gitleaks detect --source . --report-format csv --report-path gitleaks-results.csv || echo "GitLeaks CSV report completed"
+          echo "✅ GitLeaks scan completed"
+
+      - name: Display secrets summary
+        run: |
+          echo "=== SECRETS DETECTION SUMMARY ==="
+          if [ -f "gitleaks-results.json" ]; then
+            if [ -s "gitleaks-results.json" ]; then
+              echo "⚠️ Potential secrets detected!"
+              echo "Results file size: $(wc -c < gitleaks-results.json) bytes"
+            else
+              echo "✅ No secrets detected"
+            fi
+          else
+            echo "❌ No results file generated"
+          fi
+
+      - name: Upload secrets scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: secrets-scan-results
+          path: |
+            gitleaks-results.json
+            gitleaks-results.csv
+          retention-days: 30
+
+  # Job 3: Code Quality & Basic Security
+  code-quality:
+    name: Code Quality & Security Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ESLint security plugin
+        run: |
+          echo "🔧 Installing ESLint with security plugins..."
+          npm install -g eslint @eslint/create-config eslint-plugin-security
+          echo "✅ ESLint security plugins installed"
+
+      - name: Create ESLint config for security
+        run: |
+          cat > .eslintrc.json << 'EOF'
+          {
+            "env": {
+              "node": true,
+              "es2021": true
+            },
+            "plugins": ["security"],
+            "extends": ["plugin:security/recommended"],
+            "rules": {
+              "security/detect-unsafe-regex": "error",
+              "security/detect-non-literal-require": "error",
+              "security/detect-non-literal-fs-filename": "error",
+              "security/detect-eval-with-expression": "error",
+              "security/detect-pseudoRandomBytes": "error",
+              "security/detect-possible-timing-attacks": "error"
+            }
+          }
+          EOF
+
+      - name: Run ESLint security scan
+        run: |
+          echo "🔍 Running ESLint security analysis..."
+          find . -name "*.js" -o -name "*.ts" | head -50 | while read file; do
+            echo "Scanning: $file"
+            eslint "$file" --format json >> eslint-security-results.json 2>&1 || echo "ESLint found issues in $file"
+          done
+          echo "✅ ESLint security scan completed"
+
+      - name: Run basic security pattern detection
+        run: |
+          echo "🔍 Running basic security pattern detection..."
+          echo "Scanning for potential security issues..." > security-patterns.txt
+          
+          # Check for hardcoded secrets
+          echo "=== HARDCODED SECRETS CHECK ===" >> security-patterns.txt
+          grep -r -n -i "password.*=" . --include="*.js" --include="*.ts" --include="*.json" >> security-patterns.txt 2>&1 || echo "No password patterns found" >> security-patterns.txt
+          grep -r -n -i "api.key.*=" . --include="*.js" --include="*.ts" --include="*.json" >> security-patterns.txt 2>&1 || echo "No API key patterns found" >> security-patterns.txt
+          
+          # Check for dangerous functions
+          echo "=== DANGEROUS FUNCTIONS CHECK ===" >> security-patterns.txt
+          grep -r -n "eval(" . --include="*.js" --include="*.ts" >> security-patterns.txt 2>&1 || echo "No eval() usage found" >> security-patterns.txt
+          grep -r -n "innerHTML" . --include="*.js" --include="*.ts" >> security-patterns.txt 2>&1 || echo "No innerHTML usage found" >> security-patterns.txt
+          
+          echo "✅ Security pattern detection completed"
+
+      - name: Display security patterns summary
+        run: |
+          echo "=== SECURITY PATTERNS SUMMARY ==="
+          if [ -f "security-patterns.txt" ]; then
+            cat security-patterns.txt
+          fi
+
+      - name: Upload code quality results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: code-quality-results
+          path: |
+            eslint-security-results.json
+            security-patterns.txt
+          retention-days: 30
+
+  # Job 4: Security Report Generation
+  security-report:
+    name: Generate Security Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-security, secrets-detection, code-quality]
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate comprehensive security report
+        run: |
+          echo "📊 Generating comprehensive security report..."
+          
+          # Create summary report
+          cat > security-summary.md << 'EOF'
+          # 🛡️ Security Scan Summary Report
+          
+          ## Overview
+          - **Repository**: ${{ github.repository }}
+          - **Scan Date**: $(date -u)
+          - **Commit**: ${{ github.sha }}
+          - **Branch**: ${{ github.ref_name }}
+          
+          ## Scan Results
+          
+          ### 📦 Dependency Security
+          EOF
+          
+          # Add dependency scan results
+          if [ -f "dependency-scan-results/npm-audit-results.json" ]; then
+            if [ -s "dependency-scan-results/npm-audit-results.json" ]; then
+              echo "- ⚠️ npm audit found potential vulnerabilities" >> security-summary.md
+            else
+              echo "- ✅ No dependency vulnerabilities found" >> security-summary.md
+            fi
+          else
+            echo "- ⚠️ Dependency scan not available" >> security-summary.md
+          fi
+          
+          # Add secrets scan results
+          echo "" >> security-summary.md
+          echo "### 🔐 Secrets Detection" >> security-summary.md
+          if [ -f "secrets-scan-results/gitleaks-results.json" ]; then
+            if [ -s "secrets-scan-results/gitleaks-results.json" ]; then
+              echo "- ⚠️ Potential secrets detected" >> security-summary.md
+            else
+              echo "- ✅ No secrets detected" >> security-summary.md
+            fi
+          else
+            echo "- ⚠️ Secrets scan not available" >> security-summary.md
+          fi
+          
+          # Add code quality results
+          echo "" >> security-summary.md
+          echo "### 🔍 Code Quality & Security" >> security-summary.md
+          if [ -f "code-quality-results/security-patterns.txt" ]; then
+            echo "- ✅ Security patterns analysis completed" >> security-summary.md
+          else
+            echo "- ⚠️ Code quality scan not available" >> security-summary.md
+          fi
+          
+          echo "" >> security-summary.md
+          echo "## Recommendations" >> security-summary.md
+          echo "- Review all flagged vulnerabilities and address high-priority issues" >> security-summary.md
+          echo "- Ensure no hardcoded secrets are committed to the repository" >> security-summary.md
+          echo "- Run security scans regularly as part of the CI/CD pipeline" >> security-summary.md
+          
+          echo "✅ Security summary report generated"
+
+      - name: Display security summary
+        run: |
+          echo "=== COMPREHENSIVE SECURITY SUMMARY ==="
+          if [ -f "security-summary.md" ]; then
+            cat security-summary.md
+          fi
+
+      - name: Upload security summary
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-summary-report
+          path: |
+            security-summary.md
+          retention-days: 90

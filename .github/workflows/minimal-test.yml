@@ -1,0 +1,83 @@
+---
+name: Minimal Security Test
+
+on:
+  push:
+    branches: [team/security-framework-private]
+  workflow_dispatch:
+
+jobs:
+  basic-test:
+    name: Basic Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Test Environment
+        run: |
+          echo "=== ENVIRONMENT TEST ==="
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          echo "Python version: $(python3 --version)"
+          echo "Current directory: $(pwd)"
+          echo "Directory contents:"
+          ls -la
+          
+      - name: Test VibeSafe Installation
+        run: |
+          echo "=== VIBESAFE INSTALLATION TEST ==="
+          echo "Attempting to install VibeSafe CLI..."
+          npm install -g vibesafe@latest || echo "VibeSafe installation failed"
+          echo "Installation completed"
+          
+      - name: Test VibeSafe Commands (if available)
+        run: |
+          echo "=== VIBESAFE COMMANDS TEST ==="
+          if command -v vibesafe >/dev/null 2>&1; then
+            echo "VibeSafe CLI found, testing commands..."
+            echo "Testing vibesafe --version..."
+            vibesafe --version || echo "Version command failed"
+            
+            echo "Testing vibesafe --help..."
+            vibesafe --help || echo "Help command failed"
+          else
+            echo "VibeSafe CLI not available, skipping command tests"
+          fi
+          
+      - name: Test Basic Security Alternatives
+        run: |
+          echo "=== ALTERNATIVE SECURITY TOOLS TEST ==="
+          echo "Testing npm audit..."
+          if [ -f "package.json" ]; then
+            npm audit --json > npm-audit-test.json 2>&1 || echo "npm audit completed with findings"
+            echo "npm audit completed"
+          else
+            echo "No package.json found, skipping npm audit"
+          fi
+          
+          echo "Testing basic file security check..."
+          # Simple security pattern check
+          find . -name "*.js" -o -name "*.ts" -o -name "*.json" | head -10 | while read file; do
+            echo "Checking $file for basic security patterns..."
+            if grep -i "password\|secret\|key\|token" "$file" 2>/dev/null; then
+              echo "⚠️ Potential security pattern found in $file"
+            fi
+          done
+          echo "Basic security check completed"
+          
+      - name: Check Results
+        run: |
+          echo "=== RESULTS CHECK ==="
+          if [ -f "basic-test-results.json" ]; then
+            echo "✅ Results file exists"
+            echo "File size: $(stat -f%z basic-test-results.json 2>/dev/null || stat -c%s basic-test-results.json) bytes"
+            echo "First 500 characters:"
+            head -c 500 basic-test-results.json
+          else
+            echo "❌ Results file does not exist"
+          fi
+          
+          echo "All files in current directory:"
+          ls -la
