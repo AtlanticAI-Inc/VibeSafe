@@ -242,7 +242,7 @@ jobs:
       with:
         sarif_file: 'trivy-results.sarif'
 
-  # Job 6: Security Report Generation
+  # Job 6: Security Report Generation  
   security-report:
     name: Generate Security Report
     runs-on: ubuntu-latest
@@ -256,9 +256,9 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       
-    - name: Generate Security Summary Report
+    - name: Create Report Generator Script
       run: |
-        cat > generate_report.py << 'EOF'
+        cat << 'PYTHON_SCRIPT' > generate_report.py
         import json
         import os
         from datetime import datetime
@@ -283,6 +283,7 @@ jobs:
             except:
                 return 0
         
+        # Generate comprehensive security report
         report = {
             'scan_date': datetime.now().isoformat(),
             'repository': os.environ.get('GITHUB_REPOSITORY', 'unknown'),
@@ -334,64 +335,75 @@ jobs:
         with open('security-summary-report.json', 'w') as f:
             json.dump(report, f, indent=2)
         
-        # Generate markdown report
-        markdown_report = f"""# 🛡️ VibeSafe Security Scan Summary
+        # Generate markdown report  
+        repo_name = report['repository']
+        scan_date = report['scan_date']
+        commit_short = report['commit'][:8]
         
-## Overview
-- **Repository**: {report['repository']}
-- **Scan Date**: {report['scan_date']}
-- **Commit**: {report['commit'][:8]}
-- **Risk Level**: {risk_level}
-- **Total Issues**: {total_issues}
-
-## Scan Results
-
-| Tool | Issues Found |
-|------|-------------|
-"""
+        markdown_lines = [
+            "# 🛡️ VibeSafe Security Scan Summary",
+            "",
+            "## Overview",
+            f"- **Repository**: {repo_name}",
+            f"- **Scan Date**: {scan_date}",
+            f"- **Commit**: {commit_short}",
+            f"- **Risk Level**: {risk_level}",
+            f"- **Total Issues**: {total_issues}",
+            "",
+            "## Scan Results",
+            "",
+            "| Tool | Issues Found |",
+            "|------|-------------|"
+        ]
         
         for key, value in report['summary'].items():
             if key not in ['total_issues', 'risk_level']:
-                markdown_report += f"| {key} | {value} |\n"
+                markdown_lines.append(f"| {key} | {value} |")
         
-        markdown_report += f"""
-## Risk Assessment
-
-**Risk Level: {risk_level}**
-
-"""
+        markdown_lines.extend([
+            "",
+            "## Risk Assessment",
+            "",
+            f"**Risk Level: {risk_level}**",
+            ""
+        ])
         
         if risk_level == "CRITICAL":
-            markdown_report += """
-🔴 **CRITICAL RISK** - Immediate action required
-- Multiple high-severity security issues detected
-- Security team review mandatory before deployment
-- Consider emergency response procedures
-"""
+            markdown_lines.extend([
+                "🔴 **CRITICAL RISK** - Immediate action required",
+                "- Multiple high-severity security issues detected",
+                "- Security team review mandatory before deployment",
+                "- Consider emergency response procedures"
+            ])
         elif risk_level == "HIGH":
-            markdown_report += """
-🟠 **HIGH RISK** - Action required within 24 hours
-- Significant security issues detected
-- Security review recommended before deployment
-"""
+            markdown_lines.extend([
+                "🟠 **HIGH RISK** - Action required within 24 hours",
+                "- Significant security issues detected",
+                "- Security review recommended before deployment"
+            ])
         elif risk_level == "MEDIUM":
-            markdown_report += """
-🟡 **MEDIUM RISK** - Address within 1 week
-- Some security issues detected
-- Regular security review recommended
-"""
+            markdown_lines.extend([
+                "🟡 **MEDIUM RISK** - Address within 1 week",
+                "- Some security issues detected",
+                "- Regular security review recommended"
+            ])
         else:
-            markdown_report += """
-🟢 **LOW RISK** - No immediate action required
-- No significant security issues detected
-- Continue regular security monitoring
-"""
+            markdown_lines.extend([
+                "🟢 **LOW RISK** - No immediate action required",
+                "- No significant security issues detected",
+                "- Continue regular security monitoring"
+            ])
+        
+        markdown_content = '\n'.join(markdown_lines)
         
         with open('security-summary-report.md', 'w') as f:
-            f.write(markdown_report)
-        EOF
+            f.write(markdown_content)
         
-        python3 generate_report.py
+        print(f"Generated security report with {total_issues} total issues, risk level: {risk_level}")
+        PYTHON_SCRIPT
+        
+    - name: Generate Security Summary Report
+      run: python3 generate_report.py
         
     - name: Upload Security Summary
       uses: actions/upload-artifact@v4
