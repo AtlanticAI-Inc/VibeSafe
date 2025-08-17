@@ -1,0 +1,142 @@
+---
+name: Security Test Workflow
+
+on:
+  push:
+    branches: [team/security-framework-private]
+  workflow_dispatch:
+
+jobs:
+  # Test 1: Basic VibeSafe scan only
+  vibesafe-basic-test:
+    name: VibeSafe Basic Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Test VibeSafe CLI Installation
+        run: |
+          echo "🔧 Installing VibeSafe CLI..."
+          npm install -g vibesafe@latest
+          echo "✅ VibeSafe CLI installed"
+          vibesafe --version || echo "❌ VibeSafe version check failed"
+          vibesafe --help || echo "❌ VibeSafe help failed"
+          
+      - name: Test VibeSafe Scan
+        run: |
+          echo "🔍 Running basic VibeSafe scan..."
+          vibesafe scan --help || echo "❌ VibeSafe scan help failed"
+          echo "Testing scan on current directory..."
+          vibesafe scan -o test-results.json || echo "⚠️ VibeSafe scan completed with issues"
+          
+      - name: Check Results File
+        run: |
+          if [ -f "test-results.json" ]; then
+            echo "✅ Results file created"
+            echo "File size: $(wc -c < test-results.json) bytes"
+            echo "First few lines:"
+            head -10 test-results.json || echo "Could not read file"
+          else
+            echo "❌ No results file created"
+          fi
+          
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vibesafe-test-results
+          path: |
+            test-results.json
+          retention-days: 7
+
+  # Test 2: Basic dependency scan
+  dependency-basic-test:
+    name: Dependency Basic Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci || npm install
+          echo "✅ Dependencies installed"
+          
+      - name: Run npm audit
+        run: |
+          echo "🔍 Running npm audit..."
+          npm audit --json > npm-audit-results.json || echo "⚠️ npm audit found issues"
+          
+      - name: Check audit results
+        run: |
+          if [ -f "npm-audit-results.json" ]; then
+            echo "✅ Audit results file created"
+            echo "File size: $(wc -c < npm-audit-results.json) bytes"
+          else
+            echo "❌ No audit results file created"
+          fi
+          
+      - name: Upload Audit Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-test-results
+          path: |
+            npm-audit-results.json
+          retention-days: 7
+
+  # Test 3: Basic secrets scan
+  secrets-basic-test:
+    name: Secrets Basic Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Install and test GitLeaks
+        run: |
+          echo "🔧 Installing GitLeaks..."
+          wget -q https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz
+          tar -xzf gitleaks_linux_x64.tar.gz
+          chmod +x gitleaks
+          
+          echo "✅ GitLeaks installed"
+          ./gitleaks version || echo "❌ GitLeaks version check failed"
+          
+          echo "🔍 Running GitLeaks scan..."
+          ./gitleaks detect --source . --report-format json --report-path gitleaks-test-results.json || echo "⚠️ GitLeaks scan completed with potential secrets"
+          
+      - name: Check secrets results
+        run: |
+          if [ -f "gitleaks-test-results.json" ]; then
+            echo "✅ Secrets results file created"
+            echo "File size: $(wc -c < gitleaks-test-results.json) bytes"
+          else
+            echo "❌ No secrets results file created"
+          fi
+          
+      - name: Upload Secrets Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: secrets-test-results
+          path: |
+            gitleaks-test-results.json
+          retention-days: 7
