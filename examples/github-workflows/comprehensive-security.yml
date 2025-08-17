@@ -258,7 +258,7 @@ jobs:
       
     - name: Generate Security Summary Report
       run: |
-        python3 << 'EOF'
+        cat > generate_report.py << 'EOF'
         import json
         import os
         from datetime import datetime
@@ -390,6 +390,8 @@ jobs:
         with open('security-summary-report.md', 'w') as f:
             f.write(markdown_report)
         EOF
+        
+        python3 generate_report.py
         
     - name: Upload Security Summary
       uses: actions/upload-artifact@v4
