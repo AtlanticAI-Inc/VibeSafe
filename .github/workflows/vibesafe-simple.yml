@@ -1,0 +1,57 @@
+---
+name: VibeSafe Simple Test
+
+on:
+  push:
+    branches: [team/security-framework-private]
+  workflow_dispatch:
+
+jobs:
+  vibesafe-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install VibeSafe CLI
+        run: npm install -g vibesafe@latest
+        
+      - name: Test VibeSafe
+        run: |
+          echo "Testing VibeSafe CLI"
+          vibesafe --version
+          vibesafe --help
+          
+      - name: Run VibeSafe scan
+        run: |
+          echo "Running VibeSafe scan"
+          vibesafe scan -o results.json .
+          echo "Scan completed"
+          
+      - name: Show results
+        run: |
+          if [ -f results.json ]; then
+            echo "Results file created:"
+            ls -la results.json
+            echo "File size: $(wc -c < results.json) bytes"
+            if [ -s results.json ]; then
+              echo "File has content"
+            else
+              echo "File is empty"
+            fi
+          else
+            echo "No results file found"
+          fi
+          
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vibesafe-results
+          path: results.json
+          retention-days: 7
