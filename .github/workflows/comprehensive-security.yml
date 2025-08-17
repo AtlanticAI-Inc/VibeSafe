@@ -3,9 +3,9 @@ name: VibeSafe Comprehensive Security Scanning
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, team/security-framework-private]
   pull_request:
-    branches: [main]
+    branches: [main, team/security-framework-private]
   schedule:
     # Run comprehensive security scan every day at 2 AM
     - cron: '0 2 * * *'
