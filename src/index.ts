@@ -42,10 +42,13 @@ function colorSeverity(severity: FindingSeverity | SecretFinding['severity'] | U
 
 const program = new Command();
 
+// Read version from package.json
+const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf-8'));
+
 program
   .name('vibesafe')
   .description('A CLI tool to scan your codebase for security vibes.')
-  .version('0.0.1');
+  .version(packageJson.version);
 
 program.command('scan')
   .description('Scan a directory for potential security issues.')
@@ -779,3 +782,4 @@ function severityToSortOrder(severity: FindingSeverity | SecretFinding['severity
 }
 
 program.parse(process.argv);
+// Test comment to trigger GitHub Actions workflow
