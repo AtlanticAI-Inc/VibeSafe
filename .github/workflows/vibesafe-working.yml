@@ -1,0 +1,51 @@
+---
+name: VibeSafe Working
+
+on:
+  push:
+    branches: [team/security-framework-private]
+  workflow_dispatch:
+
+jobs:
+  vibesafe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install VibeSafe
+        run: |
+          npm install -g vibesafe@latest
+          echo "VibeSafe installed"
+          
+      - name: Check VibeSafe
+        run: |
+          vibesafe --version
+          echo "VibeSafe version check complete"
+          
+      - name: Run VibeSafe scan
+        run: |
+          vibesafe scan -o scan-results.json .
+          echo "VibeSafe scan complete"
+          
+      - name: Check results
+        run: |
+          if [ -f scan-results.json ]; then
+            echo "Results file exists"
+            echo "Size: $(wc -c < scan-results.json) bytes"
+            echo "First 200 chars:"
+            head -c 200 scan-results.json
+          else
+            echo "No results file found"
+          fi
+          
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vibesafe-scan
+          path: scan-results.json
