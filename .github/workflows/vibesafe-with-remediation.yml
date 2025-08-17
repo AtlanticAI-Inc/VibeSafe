@@ -1,0 +1,333 @@
+---
+name: VibeSafe CLI with Automated Remediation
+
+on:
+  push:
+    branches: [main, develop, team/security-framework-private]
+  pull_request:
+    branches: [main, team/security-framework-private]
+  workflow_dispatch:
+    inputs:
+      auto_remediate:
+        description: 'Enable automatic remediation of security issues'
+        required: false
+        default: 'false'
+        type: boolean
+      create_pr:
+        description: 'Create pull request with fixes'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  FAIL_ON_HIGH_SEVERITY: false
+
+jobs:
+  # Job 1: VibeSafe Security Analysis
+  vibesafe-analysis:
+    name: VibeSafe Security Analysis
+    runs-on: ubuntu-latest
+    outputs:
+      has_issues: ${{ steps.check-issues.outputs.has_issues }}
+      high_severity: ${{ steps.check-issues.outputs.high_severity }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install VibeSafe CLI
+        run: |
+          echo "🔧 Installing VibeSafe CLI..."
+          npm install -g vibesafe@latest
+          echo "✅ VibeSafe CLI installed: $(vibesafe --version)"
+        
+      - name: Run VibeSafe security scan
+        run: |
+          echo "🛡️ Running VibeSafe comprehensive security analysis..."
+          vibesafe scan --output vibesafe-results.json --report vibesafe-report.md .
+          echo "✅ VibeSafe scan completed"
+          
+      - name: Parse security results
+        run: |
+          echo "📊 VibeSafe Security Analysis Results"
+          echo "====================================="
+          
+          if [ -f "vibesafe-results.json" ]; then
+            # Create and run results parser
+            cat > parse_results.js << 'EOF'
+          const fs = require('fs');
+          const results = JSON.parse(fs.readFileSync('vibesafe-results.json', 'utf8'));
+          
+          let totalIssues = 0;
+          let highSeverityIssues = 0;
+          
+          const categories = [
+            { name: 'Secrets', key: 'secrets', icon: '🔐' },
+            { name: 'Dependencies', key: 'dependencies', icon: '📦' },
+            { name: 'Configuration', key: 'configuration', icon: '⚙️' },
+            { name: 'File Uploads', key: 'uploads', icon: '📁' },
+            { name: 'Endpoints', key: 'endpoints', icon: '🌐' },
+            { name: 'Rate Limiting', key: 'rateLimiting', icon: '🚦' },
+            { name: 'Logging', key: 'logging', icon: '📝' },
+            { name: 'HTTP Clients', key: 'httpClients', icon: '🌍' },
+            { name: 'Info/Warnings', key: 'info', icon: 'ℹ️' },
+            { name: 'Gitignore', key: 'gitignoreWarnings', icon: '⚠️' }
+          ];
+          
+          console.log('\n🔍 VibeSafe Findings by Category:');
+          console.log('================================');
+          
+          categories.forEach(cat => {
+            const issues = results[cat.key] || [];
+            totalIssues += issues.length;
+            
+            // Count high severity
+            issues.forEach(issue => {
+              if (issue.severity === 'High' || issue.severity === 'Critical') {
+                highSeverityIssues++;
+              }
+            });
+            
+            console.log(`${cat.icon} ${cat.name}: ${issues.length} issue${issues.length === 1 ? '' : 's'}`);
+            
+            if (issues.length > 0) {
+              issues.slice(0, 2).forEach((issue, i) => {
+                const msg = issue.message || issue.type || JSON.stringify(issue).substring(0, 80);
+                console.log(`   ${i + 1}. ${msg}`);
+              });
+              if (issues.length > 2) console.log(`   ... and ${issues.length - 2} more`);
+            }
+          });
+          
+          console.log(`\n📊 Summary: ${totalIssues} total issues, ${highSeverityIssues} high/critical`);
+          
+          // Export for next steps
+          console.log(`\n::set-output name=total_issues::${totalIssues}`);
+          console.log(`::set-output name=high_severity::${highSeverityIssues}`);
+          EOF
+            
+            node parse_results.js
+          fi
+          
+      - name: Check for remediation needs
+        id: check-issues
+        run: |
+          if [ -f "vibesafe-results.json" ]; then
+            TOTAL=$(node -p "JSON.parse(require('fs').readFileSync('vibesafe-results.json')).secrets.length + JSON.parse(require('fs').readFileSync('vibesafe-results.json')).configuration.length + JSON.parse(require('fs').readFileSync('vibesafe-results.json')).gitignoreWarnings.length + JSON.parse(require('fs').readFileSync('vibesafe-results.json')).info.length")
+            HIGH_SEVERITY=$(node -p "Object.values(JSON.parse(require('fs').readFileSync('vibesafe-results.json'))).flat().filter(i => i.severity === 'High' || i.severity === 'Critical').length")
+            
+            echo "has_issues=$( [ "$TOTAL" -gt 0 ] && echo 'true' || echo 'false' )" >> $GITHUB_OUTPUT
+            echo "high_severity=$HIGH_SEVERITY" >> $GITHUB_OUTPUT
+            echo "total_issues=$TOTAL" >> $GITHUB_OUTPUT
+          else
+            echo "has_issues=false" >> $GITHUB_OUTPUT
+            echo "high_severity=0" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Upload VibeSafe artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vibesafe-analysis-results
+          path: |
+            vibesafe-results.json
+            vibesafe-report.md
+          retention-days: 30
+
+  # Job 2: Automated Security Remediation
+  security-remediation:
+    name: Automated Security Remediation
+    runs-on: ubuntu-latest
+    needs: vibesafe-analysis
+    if: needs.vibesafe-analysis.outputs.has_issues == 'true' && (github.event.inputs.auto_remediate == 'true' || github.event_name == 'workflow_dispatch')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Download VibeSafe results
+        uses: actions/download-artifact@v4
+        with:
+          name: vibesafe-analysis-results
+          
+      - name: Run automated security remediation
+        run: |
+          echo "🛠️ Running automated security remediation..."
+          
+          # Ensure remediation script is executable
+          chmod +x scripts/security-remediation.js
+          
+          # Run remediation
+          node scripts/security-remediation.js vibesafe-results.json
+          
+      - name: Check for changes
+        id: check-changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes_made=true" >> $GITHUB_OUTPUT
+            echo "✅ Automated fixes have been applied"
+            git status --short
+          else
+            echo "changes_made=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No automated fixes were applied"
+          fi
+          
+      - name: Commit remediation changes
+        if: steps.check-changes.outputs.changes_made == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "VibeSafe Security Remediation Bot"
+          
+          git add .
+          git commit -m "fix: Automated security remediation by VibeSafe
+
+Applied automated fixes for security issues:
+- Updated .gitignore with security patterns
+- Fixed configuration issues  
+- Created secure environment template
+- Added security dependencies
+
+Generated by VibeSafe Security Remediation Tool
+See SECURITY-REMEDIATION-REPORT.md for details"
+          
+      - name: Create Pull Request with fixes
+        if: steps.check-changes.outputs.changes_made == 'true' && github.event.inputs.create_pr == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ github.token }}
+          commit-message: "fix: Automated security remediation by VibeSafe"
+          title: "🛡️ Automated Security Remediation"
+          body: |
+            ## 🛠️ Automated Security Fixes Applied
+            
+            This PR contains automated security fixes generated by the VibeSafe Security Remediation Tool.
+            
+            ### Changes Made
+            - ✅ Updated .gitignore with security patterns
+            - ✅ Fixed configuration issues (CORS, debug modes)
+            - ✅ Created secure environment template (.env.example)
+            - ✅ Added security dependencies (helmet.js)
+            
+            ### Manual Review Required
+            - 🔍 Review all changes before merging
+            - 🔐 Address any detected secrets manually
+            - ⚙️ Verify configuration changes work in your environment
+            - 🧪 Test the application after applying fixes
+            
+            ### Next Steps
+            1. Review the generated `SECURITY-REMEDIATION-REPORT.md`
+            2. Run `npm install` if package.json was modified
+            3. Test your application
+            4. Run VibeSafe scan again to verify fixes
+            
+            **Generated by:** VibeSafe CLI Security Framework
+            **Report:** See `SECURITY-REMEDIATION-REPORT.md` for detailed information
+          branch: security-remediation-${{ github.run_number }}
+          delete-branch: true
+          
+      - name: Upload remediation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-remediation-results
+          path: |
+            SECURITY-REMEDIATION-REPORT.md
+            .security-backups/
+          retention-days: 90
+
+  # Job 3: Post-Remediation Verification
+  verify-fixes:
+    name: Verify Security Fixes
+    runs-on: ubuntu-latest
+    needs: [vibesafe-analysis, security-remediation]
+    if: always() && needs.security-remediation.result == 'success'
+    
+    steps:
+      - name: Checkout code (with potential fixes)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install VibeSafe CLI
+        run: npm install -g vibesafe@latest
+        
+      - name: Run verification scan
+        run: |
+          echo "🔍 Running verification scan after remediation..."
+          vibesafe scan --output vibesafe-results-after-fix.json --report vibesafe-report-after-fix.md .
+          
+      - name: Compare before/after results
+        run: |
+          echo "📊 Comparing security results before and after remediation..."
+          
+          cat > compare_results.js << 'EOF'
+          const fs = require('fs');
+          
+          // Download original results if available
+          let beforeCount = 0;
+          let afterCount = 0;
+          
+          try {
+            if (fs.existsSync('vibesafe-results.json')) {
+              const before = JSON.parse(fs.readFileSync('vibesafe-results.json', 'utf8'));
+              beforeCount = Object.values(before).flat().length;
+            }
+          } catch (e) {
+            console.log('Could not load original results');
+          }
+          
+          try {
+            if (fs.existsSync('vibesafe-results-after-fix.json')) {
+              const after = JSON.parse(fs.readFileSync('vibesafe-results-after-fix.json', 'utf8'));
+              afterCount = Object.values(after).flat().length;
+            }
+          } catch (e) {
+            console.log('Could not load after-fix results');
+          }
+          
+          const improvement = beforeCount - afterCount;
+          
+          console.log('\n🎯 Remediation Results:');
+          console.log('=====================');
+          console.log(`Issues before: ${beforeCount}`);
+          console.log(`Issues after:  ${afterCount}`);
+          console.log(`Improvement:   ${improvement} issues fixed`);
+          
+          if (improvement > 0) {
+            console.log('✅ Security posture improved!');
+          } else if (improvement === 0) {
+            console.log('ℹ️ No change in issue count (manual fixes may be needed)');
+          } else {
+            console.log('⚠️ Issue count increased (review changes)');
+          }
+          EOF
+          
+          node compare_results.js
+          
+      - name: Upload verification results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-verification-results
+          path: |
+            vibesafe-results-after-fix.json
+            vibesafe-report-after-fix.md
+          retention-days: 30
