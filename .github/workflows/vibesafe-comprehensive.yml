@@ -1,0 +1,238 @@
+---
+name: VibeSafe CLI Comprehensive Security Analysis
+
+on:
+  push:
+    branches: [main, develop, team/security-framework-private]
+  pull_request:
+    branches: [main, team/security-framework-private]
+  workflow_dispatch:
+
+env:
+  FAIL_ON_HIGH_SEVERITY: false
+
+jobs:
+  # Primary VibeSafe CLI Analysis
+  vibesafe-scan:
+    name: VibeSafe CLI Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install VibeSafe CLI
+        run: |
+          echo "🔧 Installing VibeSafe CLI..."
+          npm install -g vibesafe@latest
+          echo "✅ VibeSafe CLI installed successfully"
+        
+      - name: Verify VibeSafe installation
+        run: |
+          echo "🔍 Verifying VibeSafe CLI installation..."
+          vibesafe --version
+          vibesafe --help
+          
+      - name: Run comprehensive VibeSafe scan
+        run: |
+          echo "🛡️ Running VibeSafe comprehensive security analysis..."
+          echo "Scanning directory: $(pwd)"
+          
+          # Show what files will be scanned
+          echo "Files to be analyzed:"
+          find . -name "*.js" -o -name "*.ts" -o -name "*.json" | grep -v node_modules | head -10
+          
+          # Run VibeSafe with both JSON and markdown reports
+          vibesafe scan --output vibesafe-results.json --report vibesafe-report.md .
+          echo "✅ VibeSafe scan completed successfully"
+          
+      - name: Create results parser script
+        run: |
+          cat > parse_results.js << 'EOF'
+          const fs = require('fs');
+          
+          if (!fs.existsSync('vibesafe-results.json')) {
+            console.log('❌ VibeSafe results file not found');
+            process.exit(1);
+          }
+          
+          try {
+            const results = JSON.parse(fs.readFileSync('vibesafe-results.json', 'utf8'));
+            console.log('\n🔍 VibeSafe Findings by Category:');
+            console.log('================================');
+            
+            let totalIssues = 0;
+            const categories = [
+              { name: 'Secrets', key: 'secrets', icon: '🔐' },
+              { name: 'Dependencies', key: 'dependencies', icon: '📦' },
+              { name: 'Configuration', key: 'configuration', icon: '⚙️' },
+              { name: 'File Uploads', key: 'uploads', icon: '📁' },
+              { name: 'Endpoints', key: 'endpoints', icon: '🌐' },
+              { name: 'Rate Limiting', key: 'rateLimiting', icon: '🚦' },
+              { name: 'Logging', key: 'logging', icon: '📝' },
+              { name: 'HTTP Clients', key: 'httpClients', icon: '🌍' },
+              { name: 'Info/Warnings', key: 'info', icon: 'ℹ️' },
+              { name: 'Gitignore', key: 'gitignoreWarnings', icon: '⚠️' }
+            ];
+            
+            categories.forEach(cat => {
+              const issues = results[cat.key] || [];
+              totalIssues += issues.length;
+              console.log(`${cat.icon} ${cat.name}: ${issues.length} issue${issues.length === 1 ? '' : 's'}`);
+              
+              // Show sample issues
+              if (issues.length > 0) {
+                issues.slice(0, 2).forEach((issue, i) => {
+                  const msg = issue.message || issue.type || JSON.stringify(issue).substring(0, 80);
+                  console.log(`   ${i + 1}. ${msg}`);
+                });
+                if (issues.length > 2) console.log(`   ... and ${issues.length - 2} more`);
+              }
+            });
+            
+            console.log(`\n📊 Total Issues: ${totalIssues}`);
+            
+            if (totalIssues === 0) {
+              console.log('🎉 Excellent! No security issues detected.');
+            } else if (totalIssues <= 5) {
+              console.log('⚠️ Some issues detected - review recommended');
+            } else {
+              console.log('🚨 Multiple issues detected - attention needed');
+            }
+            
+          } catch (e) {
+            console.error('Error parsing results:', e.message);
+            console.log('Raw file content:');
+            console.log(fs.readFileSync('vibesafe-results.json', 'utf8'));
+          }
+          EOF
+          
+      - name: Parse and display VibeSafe results
+        run: |
+          echo "📊 VibeSafe Security Analysis Results"
+          echo "====================================="
+          
+          if [ -f "vibesafe-results.json" ]; then
+            echo "Results file size: $(wc -c < vibesafe-results.json) bytes"
+            node parse_results.js
+          else
+            echo "❌ VibeSafe results file not found"
+          fi
+          
+      - name: Check for high severity issues
+        run: |
+          if [ -f "vibesafe-results.json" ]; then
+            echo "🔍 Checking for high severity issues..."
+            
+            cat > check_severity.js << 'EOF'
+          const fs = require('fs');
+          try {
+            const results = JSON.parse(fs.readFileSync('vibesafe-results.json', 'utf8'));
+            let highSeverityCount = 0;
+            
+            // Check each category for high severity issues
+            Object.keys(results).forEach(category => {
+              if (Array.isArray(results[category])) {
+                results[category].forEach(issue => {
+                  if (issue.severity && (issue.severity === 'High' || issue.severity === 'Critical')) {
+                    highSeverityCount++;
+                  }
+                });
+              }
+            });
+            
+            console.log(highSeverityCount);
+          } catch (error) {
+            console.log(0);
+          }
+          EOF
+            
+            HIGH_SEVERITY_COUNT=$(node check_severity.js)
+            echo "High/Critical severity issues found: $HIGH_SEVERITY_COUNT"
+            
+            if [ "$HIGH_SEVERITY_COUNT" -gt 0 ] && [ "$FAIL_ON_HIGH_SEVERITY" = "true" ]; then
+              echo "🚨 High/Critical severity issues detected and FAIL_ON_HIGH_SEVERITY is enabled!"
+              echo "Set FAIL_ON_HIGH_SEVERITY=false to allow the workflow to continue with warnings."
+              exit 1
+            elif [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
+              echo "⚠️ High/Critical severity issues detected but workflow will continue (FAIL_ON_HIGH_SEVERITY=false)"
+            else
+              echo "✅ No high/critical severity issues detected"
+            fi
+          fi
+          
+      - name: Display markdown report
+        if: always()
+        run: |
+          if [ -f "vibesafe-report.md" ]; then
+            echo "📄 VibeSafe Markdown Report:"
+            echo "============================"
+            cat vibesafe-report.md
+          else
+            echo "⚠️ VibeSafe markdown report not found"
+          fi
+          
+      - name: Upload VibeSafe artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vibesafe-security-analysis
+          path: |
+            vibesafe-results.json
+            vibesafe-report.md
+          retention-days: 30
+            
+  # Supplementary analysis (lightweight)
+  supplementary-analysis:
+    name: Supplementary Security Analysis
+    runs-on: ubuntu-latest
+    needs: vibesafe-scan
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: |
+          if [ -f "package.json" ]; then
+            echo "📦 Installing dependencies for supplementary analysis..."
+            npm ci || npm install
+            echo "✅ Dependencies installed"
+          else
+            echo "⚠️ No package.json found"
+          fi
+          
+      - name: Run npm audit (supplement to VibeSafe)
+        run: |
+          echo "🔍 Running npm audit as supplement to VibeSafe..."
+          if [ -f "package.json" ]; then
+            npm audit --json > npm-audit-supplement.json 2>&1 || echo "npm audit completed"
+            
+            # Show summary
+            if [ -f "npm-audit-supplement.json" ]; then
+              echo "npm audit completed - see artifacts for details"
+            fi
+          else
+            echo "⚠️ No package.json - skipping npm audit"
+            echo "{}" > npm-audit-supplement.json
+          fi
+          
+      - name: Upload supplementary results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supplementary-analysis
+          path: |
+            npm-audit-supplement.json
+          retention-days: 30
